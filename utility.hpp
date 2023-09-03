@@ -9,13 +9,10 @@ namespace hdrs {
 	template<typename T>
 	T declval() noexcept;
 
-	template<typename T, T>
-	struct constant {};
-
 	template<typename T, T t>
-	constexpr T value(constant<T, t>) noexcept {
-		return t;
-	}
+	struct constant {
+		static constexpr T value{t};
+	};
 
 	template<bool b>
 	using bool_ = constant<bool, b>;
