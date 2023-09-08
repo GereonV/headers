@@ -3,8 +3,7 @@
 
 #include "utility.hpp"
 
-namespace hdrs {
-namespace pp {
+namespace hdrs::pp {
 
 	template<typename T>
 	constexpr T log2(T t) noexcept {
@@ -14,7 +13,7 @@ namespace pp {
 	template<typename PtrT, size_t Alignment>
 	struct pointer_traits_base {
 		static_assert(!(Alignment & Alignment - 1), "alignment must be a power of 2");
-		using type = remove_ref_t<decltype(*declval<PtrT>())>; // possibly cv-qualified
+		using type = std::remove_reference_t<decltype(*declval<PtrT>())>; // possibly cv-qualified
 		static constexpr auto free_bits = log2(Alignment);
 	};
 
@@ -88,10 +87,7 @@ namespace pp {
 			return Traits::from_int(_value & ptr_mask());
 		}
 
-		#if __cplusplus >= 201402
-		constexpr
-		#endif
-		ptr_reference pointer() noexcept {
+		constexpr ptr_reference pointer() noexcept {
 			return _value;
 		}
 
@@ -99,17 +95,11 @@ namespace pp {
 			return _value & int_mask();
 		}
 
-		#if __cplusplus >= 201402
-		constexpr
-		#endif
-		int_reference integer() noexcept {
+		constexpr int_reference integer() noexcept {
 			return _value;
 		}
 
-		#if __cplusplus >= 201402
-		constexpr
-		#endif
-		friend void swap(packed_pointer & a, packed_pointer & b) noexcept {
+		friend constexpr void swap(packed_pointer & a, packed_pointer & b) noexcept {
 			auto const t = a._value;
 			a._value = b._value;
 			b._value = t;
@@ -126,13 +116,11 @@ namespace pp {
 		uintptr _value;
 	};
 
-#if __cplusplus >= 201703
 	template<typename PtrT>
 	packed_pointer(PtrT) -> packed_pointer<PtrT>;
 
 	template<typename PtrT, typename Int>
 	packed_pointer(PtrT, Int) -> packed_pointer<PtrT>;
-#endif
 
 	template<typename RAIIPtrT, size_t Alignment>
 	struct raii_pointer_traits : pointer_traits_base<RAIIPtrT, Alignment> {
@@ -205,10 +193,7 @@ namespace pp {
 				Traits::construct(other.pointer())
 			), other.integer()} {}
 
-		#if __cplusplus >= 201402
-		constexpr
-		#endif
-		packed_raii_pointer(packed_raii_pointer && other)
+		constexpr packed_raii_pointer(packed_raii_pointer && other)
 			noexcept(noexcept(
 				Traits::release(Traits::construct(other.pointer()))
 			))
@@ -232,10 +217,7 @@ namespace pp {
 			return _pp.pointer();
 		}
 
-		#if __cplusplus >= 201402
-		constexpr
-		#endif
-		ptr_reference pointer() noexcept {
+		constexpr ptr_reference pointer() noexcept {
 			return _pp;
 		}
 
@@ -243,32 +225,23 @@ namespace pp {
 			return _pp.integer();
 		}
 
-		#if __cplusplus >= 201402
-		constexpr
-		#endif
-		int_reference integer() noexcept {
+		constexpr int_reference integer() noexcept {
 			return _pp;
 		}
 
-		#if __cplusplus >= 201402
-		constexpr
-		#endif
-		friend void swap(packed_raii_pointer & a, packed_raii_pointer & b) noexcept {
+		friend constexpr void swap(packed_raii_pointer & a, packed_raii_pointer & b) noexcept {
 			swap(a._pp, b._pp);
 		}
 	private:
 		pp _pp;
 	};
 
-	#if __cplusplus >= 201703
 	template<typename PtrT>
 	packed_raii_pointer(PtrT) -> packed_raii_pointer<PtrT>;
 
 	template<typename PtrT, typename Int>
 	packed_raii_pointer(PtrT, Int) -> packed_raii_pointer<PtrT>;
-	#endif
 
-} // pp
-} // hdrs
+}
 
 #endif
