@@ -9,7 +9,7 @@
 // - allocate_all()
 // - deallocate(allocation)
 // - deallocate_all()
-// - grow(allocation &, size_t)
+// - resize(allocation &, size_t)
 // - owns(allocation)
 //
 // - reallocate(allocation &, size_t)
@@ -19,9 +19,9 @@
 //   malloc_usable_size, _msize on Windows, malloc_size on MacOS
 // TODO aligned_mallocator
 //   posix_memalign, _aligned_malloc on Windows
+// TODO free list allocator
 // TODO alignment
 // TODO ctors
-// TODO SFINAE using <member-function>
 
 #include "utility.hpp"
 
@@ -48,13 +48,33 @@ namespace hdrs::alloc {
 			return a;
 		}
 
+		constexpr allocation allocate_aligned(size_t size, size_t alignment_log2) noexcept {
+			auto const alignment = 1 << alignment_log2;
+			auto align_offset = alignment - (reinterpret_cast<size_t>(unused) & alignment - 1);
+			if(size > data + N - unused - align_offset) UNLIKELY
+				return {nullptr};
+			unused += align_offset;
+			allocation a{unused, size};
+			unused += size;
+			return a;
+		}
+
 		constexpr void deallocate(allocation a) noexcept {
-			if(a.address == unused - a.size)
+			if(a.address == unused - a.size) UNLIKELY
 				unused = static_cast<unsigned char *>(a.address);
 		}
 
 		constexpr void deallocate_all(allocation a) noexcept {
 			unused = data;
+		}
+
+		constexpr bool resize(allocation & a, size_t new_size) noexcept {
+			if(a.address != unused - a.size || new_size > data + N - a.address) UNLIKELY
+				return false;
+			unused -= a.size;
+			a.size = new_size;
+			unused += new_size;
+			return true;
 		}
 
 		constexpr bool owns(allocation a) const noexcept {
@@ -66,8 +86,6 @@ namespace hdrs::alloc {
 		unsigned char * unused{data};
 	};
 
-	// TODO free list allocator
-
 	template<typename A, typename... B>
 	class try_allocator : A, B... {
 	public:
@@ -77,6 +95,15 @@ namespace hdrs::alloc {
 			auto a = A::allocate(size);
 			if(!a.address)
 				((a = B::allocate(size), a.address) || ...);
+			return a;
+		}
+
+		constexpr allocation allocate_aligned(size_t size, size_t al)
+			noexcept(noexcept(A::allocate_aligned(size, al).address || (B::allocate_aligned(size, al).address || ...)))
+		{
+			auto a = A::allocate_aligned(size, al);
+			if(!a.address)
+				((a = B::allocate_aligned(size, al), a.address) || ...);
 			return a;
 		}
 
@@ -98,33 +125,80 @@ namespace hdrs::alloc {
 
 	class nop_allocation_manager {
 	public:
-		constexpr void before_allocation(size_t) const noexcept {}
-		constexpr void after_allocation(size_t, allocation) const noexcept {}
-		constexpr void before_deallocation(allocation) const noexcept {}
-		constexpr void after_deallocation(allocation) const noexcept {}
+		constexpr void before_allocate(size_t) const noexcept {}
+		constexpr void after_allocate(size_t, allocation) const noexcept {}
+		constexpr void before_allocate_aligned(size_t, size_t) const noexcept {}
+		constexpr void after_allocate_aligned(size_t, size_t, allocation) const noexcept {}
+		constexpr void before_allocate_all() const noexcept {}
+		constexpr void after_allocate_all(allocation) const noexcept {}
+		constexpr void before_deallocate(allocation) const noexcept {}
+		constexpr void after_deallocate(allocation) const noexcept {}
+		constexpr void before_deallocate_all(allocation) const noexcept {}
+		constexpr void after_deallocate_all(allocation) const noexcept {}
+		constexpr void before_resize(allocation, size_t) const noexcept {}
+		constexpr void after_resize(allocation, size_t, bool) const noexcept {}
 	};
 
 	template<typename A, typename Manager>
 	class managed_allocator : A, Manager {
 	public:
 		constexpr allocation allocate(size_t size)
-			noexcept(noexcept(Manager::before_allocation(size), A::allocate(size), Manager::before_allocation(size)))
+			noexcept(noexcept(Manager::before_allocate(size), Manager::after_allocate(size, A::allocate(size))))
 		{
-			Manager::before_allocation(size);
+			Manager::before_allocate(size);
 			auto a = A::allocate(size);
-			Manager::after_allocation(size, a);
+			Manager::after_allocate(size, a);
+			return a;
+		}
+
+		constexpr allocation allocate_aligned(size_t size, size_t al)
+			noexcept(noexcept(Manager::before_allocate_aligned(size, al), Manager::after_allocate_aligned(size, al, A::allocate_aligned(size, al))))
+		{
+			Manager::before_allocate_aligned(size, al);
+			auto a = A::allocate_aligned(size, al);
+			Manager::after_allocate_aligned(size, a);
+			return a;
+		}
+
+		constexpr allocation allocate_all()
+			noexcept(noexcept(Manager::before_allocate_all(), Manager::after_allocate_all(A::allocate_all())))
+		{
+			Manager::before_allocate_all();
+			auto a = A::allocate_all();
+			Manager::after_allocat_all(a);
 			return a;
 		}
 
 		constexpr void deallocate(allocation a)
-			noexcept(noexcept(Manager::before_deallocation(a), A::deallocate(a), Manager::before_deallocation(a)))
+			noexcept(noexcept(Manager::before_deallocate(a), A::deallocate(a), Manager::after_deallocate(a)))
 		{
-			Manager::before_deallocation(a);
+			Manager::before_deallocate(a);
 			A::deallocate(a);
-			Manager::after_deallocation(a);
+			Manager::after_deallocate(a);
 		}
 
-		using A::owns;
+		constexpr void deallocate_all()
+			noexcept(noexcept(Manager::before_deallocate_all(), A::deallocate_all(), Manager::after_deallocate_all()))
+		{
+			Manager::before_deallocate_all();
+			A::deallocate_all();
+			Manager::after_deallocate_all();
+		}
+
+		constexpr bool resize(allocation & a, size_t new_size)
+			noexcept(noexcept(Manager::before_resize(a, new_size), Manager::after_resize(a, new_size, A::resize(a, new_size))))
+		{
+			Manager::before_resize(a, new_size);
+			auto r = A::resize(a, new_size);
+			Manager::after_resize(a, new_size, r);
+			return r;
+		}
+
+		constexpr bool owns(allocation a)
+			noexcept(noexcept(A::owns(a)))
+		{
+			return A::owns(a);
+		}
 	};
 
 	template<typename A, size_t Min, size_t Max>
@@ -139,8 +213,25 @@ namespace hdrs::alloc {
 			return size < Min || size > Max ? allocation{nullptr} : A::allocate(size);
 		}
 
+		constexpr allocation allocate_aligned(size_t size, size_t al)
+			noexcept(noexcept(size < Min || size > Max || A::allocate_aligned(size, al)))
+		{
+			return size < Min || size > Max ? allocation{nullptr} : A::allocate_aligned(size, al);
+		}
+
 		using A::deallocate;
-		using A::owns;
+
+		constexpr bool resize(allocation & a, size_t new_size)
+			noexcept(noexcept(new_size >= Min && new_size <= Max && A::resize(a, new_size)))
+		{
+			return new_size >= Min && new_size <= Max && A::resize(a, new_size);
+		}
+
+		constexpr bool owns(allocation a)
+			noexcept(noexcept(A::owns(a)))
+		{
+			return a.size >= Min && a.size <= Max && A::owns(a);
+		}
 	};
 
 	template<typename A, size_t Min>
